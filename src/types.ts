@@ -48,6 +48,8 @@ export interface ImageItem {
   feathering: number; // 0 to 10
   brightness: number; // -50 to 50
   contrast: number; // -50 to 50
+  edgeDefringe?: boolean; // Anti-halo / defringe edge cleanup
+  edgeErode?: number; // 0 to 3px alpha edge contraction to eliminate white border artifacts
 }
 
 export interface GlobalSettings {
@@ -59,6 +61,8 @@ export interface GlobalSettings {
   jpegQuality: number; // 0.1 to 1.0
   autoProcessOnUpload: boolean;
   concurrency: number;
+  edgeDefringe: boolean;
+  edgeErode: number;
 }
 
 export interface PrintSheetItem {

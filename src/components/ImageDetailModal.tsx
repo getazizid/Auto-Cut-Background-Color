@@ -58,6 +58,8 @@ export const ImageDetailModal: React.FC<ImageDetailModalProps> = ({
   const [feathering, setFeathering] = useState<number>(item.feathering || 0);
   const [brightness, setBrightness] = useState<number>(item.brightness || 0);
   const [contrast, setContrast] = useState<number>(item.contrast || 0);
+  const [edgeDefringe, setEdgeDefringe] = useState<boolean>(item.edgeDefringe ?? true);
+  const [edgeErode, setEdgeErode] = useState<number>(item.edgeErode ?? 0);
 
   // Trigger live re-rendering when sliders or background changes
   useEffect(() => {
@@ -77,6 +79,8 @@ export const ImageDetailModal: React.FC<ImageDetailModalProps> = ({
           feathering,
           brightness,
           contrast,
+          edgeDefringe,
+          edgeErode,
           exportFormat: 'image/png',
         });
         if (!isCancelled) {
@@ -92,6 +96,8 @@ export const ImageDetailModal: React.FC<ImageDetailModalProps> = ({
             feathering,
             brightness,
             contrast,
+            edgeDefringe,
+            edgeErode,
             resultDataUrl: url,
           });
         }
@@ -106,7 +112,7 @@ export const ImageDetailModal: React.FC<ImageDetailModalProps> = ({
     return () => {
       isCancelled = true;
     };
-  }, [customBg, customSize, fitMode, scale, offsetX, offsetY, feathering, brightness, contrast, item.noBgDataUrl]);
+  }, [customBg, customSize, fitMode, scale, offsetX, offsetY, feathering, brightness, contrast, edgeDefringe, edgeErode, item.noBgDataUrl]);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 bg-slate-950/70 backdrop-blur-sm animate-fade-in">
@@ -370,6 +376,49 @@ export const ImageDetailModal: React.FC<ImageDetailModalProps> = ({
                   />
                 </div>
 
+                {/* Edge Cleanup & Inward Trim (Anti-Halo Putih) */}
+                <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-slate-800 flex items-center gap-1.5">
+                      <Sparkles className="w-3.5 h-3.5 text-amber-600" />
+                      <span>{lang === 'id' ? 'Pembersih Pinggiran Putih (Defringe)' : 'Edge Defringe (Anti-Halo)'}</span>
+                    </span>
+                    <input
+                      type="checkbox"
+                      checked={edgeDefringe}
+                      onChange={(e) => setEdgeDefringe(e.target.checked)}
+                      className="w-4 h-4 accent-red-600 rounded cursor-pointer"
+                    />
+                  </div>
+                  <p className="text-[10px] text-slate-500">
+                    {lang === 'id'
+                      ? 'Menghilangkan pendaran putih/abu-abu halus di sekitar rambut dan pakaian'
+                      : 'Eliminates faint white halos & fringe bleeding around hair and clothing'}
+                  </p>
+
+                  <div>
+                    <div className="flex justify-between font-semibold text-slate-700 mb-1">
+                      <span>{lang === 'id' ? 'Pangkas Tepi Masuk (Edge Trim)' : 'Edge Inward Contraction'}</span>
+                      <span className="text-slate-500 font-mono">+{edgeErode} px</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="0"
+                      max="3"
+                      step="1"
+                      value={edgeErode}
+                      onChange={(e) => setEdgeErode(parseInt(e.target.value))}
+                      className="w-full accent-red-600 cursor-pointer"
+                    />
+                    <div className="flex justify-between text-[9px] text-slate-400">
+                      <span>Normal (0px)</span>
+                      <span>1px (Rapi)</span>
+                      <span>2px</span>
+                      <span>3px (Ketat)</span>
+                    </div>
+                  </div>
+                </div>
+
                 {/* Reset button */}
                 <button
                   type="button"
@@ -380,6 +429,8 @@ export const ImageDetailModal: React.FC<ImageDetailModalProps> = ({
                     setFeathering(0);
                     setBrightness(0);
                     setContrast(0);
+                    setEdgeDefringe(true);
+                    setEdgeErode(0);
                   }}
                   className="w-full py-1.5 text-xs font-semibold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors"
                 >

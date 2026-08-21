@@ -154,6 +154,163 @@ export async function fallbackRemoveBackground(imageSource: string | File | Blob
 }
 
 /**
+ * Refines the alpha mask / foreground edges of a transparent PNG subject image:
+ * - Edge Defringing (Color bleeding into semi-transparent border pixels to prevent white/light halo)
+ * - Alpha thresholding & smoothing (removes low-alpha white fringes)
+ * - Optional mask erosion / edge contraction to eliminate background spill
+ */
+export function cleanAndDefringeEdges(
+  canvas: HTMLCanvasElement,
+  options: {
+    erodeRadius?: number; // 0 to 3 pixels inward contraction
+    defringe?: boolean;   // Clamps alpha & suppresses bright white edge halos
+    feather?: number;     // Soft feathering
+  } = {}
+) {
+  const { erodeRadius = 1, defringe = true } = options;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+
+  const w = canvas.width;
+  const h = canvas.height;
+  const imgData = ctx.getImageData(0, 0, w, h);
+  const data = imgData.data;
+  const origAlpha = new Uint8Array(w * h);
+
+  for (let i = 0; i < w * h; i++) {
+    origAlpha[i] = data[i * 4 + 3];
+  }
+
+  // 1. Defringe: Remove faint semi-transparent white/gray halo around subject edges
+  if (defringe) {
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const i = (y * w + x) * 4;
+        const a = data[i + 3];
+
+        if (a > 0 && a < 254) {
+          const r = data[i];
+          const g = data[i + 1];
+          const b = data[i + 2];
+
+          // If the edge pixel is very bright/white (typical background spill artifact)
+          const brightness = (r + g + b) / 3;
+          if (brightness > 190 && a < 200) {
+            // Sharpen cutoff on faint white halos
+            data[i + 3] = a < 80 ? 0 : Math.round(a * 0.6);
+          } else if (a < 35) {
+            // Cutoff noisy stray alpha pixels
+            data[i + 3] = 0;
+          }
+        }
+      }
+    }
+  }
+
+  // 2. Alpha Erosion: Shrink alpha mask by `erodeRadius` pixels to completely swallow outer edge halos
+  if (erodeRadius > 0) {
+    const erodedAlpha = new Uint8Array(w * h);
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const idx = y * w + x;
+        let minAlpha = origAlpha[idx];
+
+        if (minAlpha > 0) {
+          for (let dy = -erodeRadius; dy <= erodeRadius; dy++) {
+            const ny = y + dy;
+            if (ny < 0 || ny >= h) {
+              minAlpha = 0;
+              break;
+            }
+            for (let dx = -erodeRadius; dx <= erodeRadius; dx++) {
+              const nx = x + dx;
+              if (nx < 0 || nx >= w) {
+                minAlpha = 0;
+                break;
+              }
+              if (dx * dx + dy * dy <= erodeRadius * erodeRadius) {
+                const neighborA = origAlpha[ny * w + nx];
+                if (neighborA < minAlpha) minAlpha = neighborA;
+              }
+            }
+            if (minAlpha === 0) break;
+          }
+        }
+        erodedAlpha[idx] = minAlpha;
+      }
+    }
+
+    // Apply eroded alpha back to image data
+    for (let i = 0; i < w * h; i++) {
+      data[i * 4 + 3] = erodedAlpha[i];
+    }
+  }
+
+  // 3. Color Bleed: For remaining semi-transparent border pixels, copy RGB from nearest opaque pixel
+  // to avoid white-fringing when blending onto solid red/blue backgrounds
+  for (let y = 1; y < h - 1; y++) {
+    for (let x = 1; x < w - 1; x++) {
+      const idx = (y * w + x) * 4;
+      const a = data[idx + 3];
+
+      if (a > 0 && a < 220) {
+        // Look around for a strong opaque neighbor
+        let bestR = data[idx];
+        let bestG = data[idx + 1];
+        let bestB = data[idx + 2];
+        let found = false;
+
+        const offsets = [-1, 0, 1];
+        for (const dy of offsets) {
+          for (const dx of offsets) {
+            if (dx === 0 && dy === 0) continue;
+            const nIdx = ((y + dy) * w + (x + dx)) * 4;
+            if (data[nIdx + 3] >= 240) {
+              bestR = data[nIdx];
+              bestG = data[nIdx + 1];
+              bestB = data[nIdx + 2];
+              found = true;
+              break;
+            }
+          }
+          if (found) break;
+        }
+
+        if (found) {
+          data[idx] = bestR;
+          data[idx + 1] = bestG;
+          data[idx + 2] = bestB;
+        }
+      }
+    }
+  }
+
+  ctx.putImageData(imgData, 0, 0);
+}
+
+/**
+ * Post-processes a transparent PNG dataURL to eliminate white fringes & smooth borders
+ */
+export async function refineSubjectEdges(
+  dataUrl: string,
+  erodeRadius: number = 1,
+  defringe: boolean = true
+): Promise<string> {
+  const img = await loadImage(dataUrl);
+  const canvas = document.createElement('canvas');
+  canvas.width = img.naturalWidth || img.width;
+  canvas.height = img.naturalHeight || img.height;
+
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return dataUrl;
+
+  ctx.drawImage(img, 0, 0);
+  cleanAndDefringeEdges(canvas, { erodeRadius, defringe });
+
+  return canvas.toDataURL('image/png');
+}
+
+/**
  * Primary AI Background removal function
  */
 export async function executeBackgroundRemoval(
@@ -167,28 +324,33 @@ export async function executeBackgroundRemoval(
     const blob = await removeBackground(imageSource, {
       progress: (key, current, total) => {
         if (total > 0 && onProgress) {
-          const ratio = Math.min(0.9, 0.2 + (current / total) * 0.7);
+          const ratio = Math.min(0.85, 0.2 + (current / total) * 0.65);
           onProgress(Math.round(ratio * 100));
         }
       },
       output: {
         format: 'image/png',
-        quality: 0.95,
+        quality: 0.98,
       },
     });
 
-    if (onProgress) onProgress(95);
-    const dataUrl = await fileToDataUrl(blob);
+    if (onProgress) onProgress(90);
+    const rawDataUrl = await fileToDataUrl(blob);
+    
+    // Auto-clean & Defringe edges to eliminate white fringes/halos completely
+    const refinedDataUrl = await refineSubjectEdges(rawDataUrl, 1, true);
+
     if (onProgress) onProgress(100);
-    return dataUrl;
+    return refinedDataUrl;
   } catch (error) {
     console.warn('Neural network bg removal fallback triggered:', error);
     if (onProgress) onProgress(50);
     // Fallback to Canvas-based segmentation
     const fallbackBlob = await fallbackRemoveBackground(imageSource);
-    const dataUrl = await fileToDataUrl(fallbackBlob);
+    const rawDataUrl = await fileToDataUrl(fallbackBlob);
+    const refinedDataUrl = await refineSubjectEdges(rawDataUrl, 1, true);
     if (onProgress) onProgress(100);
-    return dataUrl;
+    return refinedDataUrl;
   }
 }
 
@@ -207,6 +369,8 @@ export async function renderCompositedPhoto({
   feathering = 0,
   brightness = 0,
   contrast = 0,
+  edgeDefringe = true,
+  edgeErode = 0,
   exportFormat = 'image/jpeg',
   jpegQuality = 0.92,
 }: {
@@ -221,10 +385,18 @@ export async function renderCompositedPhoto({
   feathering?: number;
   brightness?: number;
   contrast?: number;
+  edgeDefringe?: boolean;
+  edgeErode?: number;
   exportFormat?: 'image/png' | 'image/jpeg' | 'image/webp';
   jpegQuality?: number;
 }): Promise<string> {
-  const subjectImg = await loadImage(noBgImageUrl);
+  // If user requested custom edge contraction (erode) or defringe toggling in detail modal
+  let processedSubjectUrl = noBgImageUrl;
+  if (edgeErode > 0) {
+    processedSubjectUrl = await refineSubjectEdges(noBgImageUrl, edgeErode, edgeDefringe);
+  }
+
+  const subjectImg = await loadImage(processedSubjectUrl);
   const srcW = subjectImg.naturalWidth || subjectImg.width;
   const srcH = subjectImg.naturalHeight || subjectImg.height;
 

@@ -48,6 +48,8 @@ export default function App() {
     jpegQuality: 0.95,
     autoProcessOnUpload: true,
     concurrency: 2,
+    edgeDefringe: true,
+    edgeErode: 0,
   });
 
   // Track processing cancellation
@@ -78,6 +80,8 @@ export default function App() {
             feathering: 0,
             brightness: 0,
             contrast: 0,
+            edgeDefringe: settings.edgeDefringe,
+            edgeErode: settings.edgeErode,
           });
         } catch (err) {
           console.error('Error reading file:', file.name, err);
@@ -119,6 +123,8 @@ export default function App() {
         feathering: item.feathering,
         brightness: item.brightness,
         contrast: item.contrast,
+        edgeDefringe: item.edgeDefringe ?? settings.edgeDefringe,
+        edgeErode: item.edgeErode ?? settings.edgeErode,
         exportFormat: settings.exportFormat,
         jpegQuality: settings.jpegQuality,
       });
@@ -223,6 +229,8 @@ export default function App() {
         feathering: item.feathering,
         brightness: item.brightness,
         contrast: item.contrast,
+        edgeDefringe: item.edgeDefringe ?? settings.edgeDefringe,
+        edgeErode: item.edgeErode ?? settings.edgeErode,
         exportFormat: settings.exportFormat,
         jpegQuality: settings.jpegQuality,
       });
@@ -242,6 +250,8 @@ export default function App() {
           customBg: { ...settings.background },
           customSize: { ...settings.sizePreset },
           customFitMode: settings.fitMode,
+          edgeDefringe: settings.edgeDefringe,
+          edgeErode: settings.edgeErode,
         };
         if (newItem.noBgDataUrl) {
           const resultUrl = await renderCompositedPhoto({
@@ -256,6 +266,8 @@ export default function App() {
             feathering: newItem.feathering,
             brightness: newItem.brightness,
             contrast: newItem.contrast,
+            edgeDefringe: settings.edgeDefringe,
+            edgeErode: settings.edgeErode,
             exportFormat: settings.exportFormat,
             jpegQuality: settings.jpegQuality,
           });

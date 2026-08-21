@@ -74,37 +74,60 @@ export const GlobalControls: React.FC<GlobalControlsProps> = ({
         />
       </div>
 
-      {/* 3. Export Format */}
-      <div className="pt-2 border-t border-slate-100 flex items-center justify-between">
-        <div>
-          <label className="text-xs font-bold uppercase tracking-wider text-slate-700 block">
-            {lang === 'id' ? 'Format File Output' : 'Export File Format'}
-          </label>
-          <span className="text-[10px] text-slate-500">
-            {settings.exportFormat === 'image/png'
-              ? 'Mendukung transparansi (Lossless)'
-              : 'Ukuran file lebih kecil (Standard Pas Foto)'}
-          </span>
+      {/* 3. Export Format & Edge Cleanup */}
+      <div className="pt-2 border-t border-slate-100 space-y-3">
+        <div className="flex items-center justify-between">
+          <div>
+            <label className="text-xs font-bold uppercase tracking-wider text-slate-700 block">
+              {lang === 'id' ? 'Format File Output' : 'Export File Format'}
+            </label>
+            <span className="text-[10px] text-slate-500">
+              {settings.exportFormat === 'image/png'
+                ? 'Mendukung transparansi (Lossless)'
+                : 'Ukuran file lebih kecil (Standard Pas Foto)'}
+            </span>
+          </div>
+          <div className="inline-flex rounded-xl bg-slate-100 p-1 border border-slate-200 text-xs">
+            {[
+              { id: 'image/jpeg', label: 'JPG' },
+              { id: 'image/png', label: 'PNG' },
+              { id: 'image/webp', label: 'WEBP' },
+            ].map((fmt) => (
+              <button
+                key={fmt.id}
+                type="button"
+                onClick={() => onUpdateSettings({ exportFormat: fmt.id as any })}
+                className={`px-3 py-1 font-bold rounded-lg transition-all ${
+                  settings.exportFormat === fmt.id
+                    ? 'bg-white text-slate-900 shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                {fmt.label}
+              </button>
+            ))}
+          </div>
         </div>
-        <div className="inline-flex rounded-xl bg-slate-100 p-1 border border-slate-200 text-xs">
-          {[
-            { id: 'image/jpeg', label: 'JPG' },
-            { id: 'image/png', label: 'PNG' },
-            { id: 'image/webp', label: 'WEBP' },
-          ].map((fmt) => (
-            <button
-              key={fmt.id}
-              type="button"
-              onClick={() => onUpdateSettings({ exportFormat: fmt.id as any })}
-              className={`px-3 py-1 font-bold rounded-lg transition-all ${
-                settings.exportFormat === fmt.id
-                  ? 'bg-white text-slate-900 shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              {fmt.label}
-            </button>
-          ))}
+
+        {/* Global Edge Defringe Switch */}
+        <div className="flex items-center justify-between p-2.5 bg-slate-50 rounded-xl border border-slate-200">
+          <div>
+            <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+              <Sparkles className="w-3.5 h-3.5 text-amber-600" />
+              <span>{lang === 'id' ? 'Pembersih Pinggiran Putih Otomatis' : 'Auto Edge Defringe (Anti-Halo)'}</span>
+            </span>
+            <p className="text-[10px] text-slate-500 mt-0.5">
+              {lang === 'id'
+                ? 'Hilangkan halo putih/abu-abu di batas rambut dan pakaian'
+                : 'Refines alpha cutout to eliminate light background fringe'}
+            </p>
+          </div>
+          <input
+            type="checkbox"
+            checked={settings.edgeDefringe}
+            onChange={(e) => onUpdateSettings({ edgeDefringe: e.target.checked })}
+            className="w-4 h-4 accent-red-600 rounded cursor-pointer"
+          />
         </div>
       </div>
 
