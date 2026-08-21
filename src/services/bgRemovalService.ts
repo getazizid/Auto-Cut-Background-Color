@@ -155,10 +155,10 @@ export async function fallbackRemoveBackground(imageSource: string | File | Blob
 
 /**
  * Refines the alpha mask / foreground edges of a transparent PNG subject image:
- * - Euclidean Distance Field & Boundary Detection
- * - 100% Subject Core Protection (white shirts, ties, teeth, jewelry remain untouched)
- * - Complete Color Decontamination (Inpaints pure foreground RGB onto boundary pixels to destroy white/light halos)
- * - Anti-Aliased Sub-Pixel Edge Falloff (Remove.bg studio quality)
+ * - Hair Gap & Enclosed Background Cutout (cleans background between hair strands & loops)
+ * - Color Decontamination / Foreground Inpainting on Hair Fringe (replaces white backdrop spill with pure hair RGB)
+ * - Anti-Aliased Sub-Pixel Alpha Matting (remove.bg studio quality)
+ * - 100% Solid Core Protection (white shirts, ties, teeth, skin remain fully intact)
  */
 export function cleanAndDefringeEdges(
   canvas: HTMLCanvasElement,
@@ -179,79 +179,51 @@ export function cleanAndDefringeEdges(
   const data = imgData.data;
   const numPixels = w * h;
 
-  // Track original alpha and RGB
+  // 1. Capture original alpha & RGB
   const origAlpha = new Uint8Array(numPixels);
   for (let i = 0; i < numPixels; i++) {
     origAlpha[i] = data[i * 4 + 3];
   }
 
-  // Step 1: Detect True External Background via Boundary Flood Fill
-  const isExternalBg = new Uint8Array(numPixels);
+  // 2. Identify Background Pixels (External border AND enclosed hair gaps/holes)
+  const isBg = new Uint8Array(numPixels);
   const bgQueue: number[] = [];
 
-  // Seed boundary from transparent pixels at image edges
+  for (let i = 0; i < numPixels; i++) {
+    const a = origAlpha[i];
+    const r = data[i * 4];
+    const g = data[i * 4 + 1];
+    const b = data[i * 4 + 2];
+    const brightness = (r + g + b) / 3;
+
+    // Faint alpha, transparent pixels, or white background spill in low-alpha hair gaps
+    if (a < 35 || (a < 75 && brightness > 210)) {
+      isBg[i] = 1;
+      bgQueue.push(i);
+    }
+  }
+
+  // Also flood fill from canvas borders with threshold < 85 to capture fuzzy outer backdrop
   for (let x = 0; x < w; x++) {
     const topIdx = x;
     const btmIdx = (h - 1) * w + x;
-    if (origAlpha[topIdx] < 60) {
-      isExternalBg[topIdx] = 1;
-      bgQueue.push(topIdx);
-    }
-    if (origAlpha[btmIdx] < 60) {
-      isExternalBg[btmIdx] = 1;
-      bgQueue.push(btmIdx);
-    }
+    if (origAlpha[topIdx] < 85 && !isBg[topIdx]) { isBg[topIdx] = 1; bgQueue.push(topIdx); }
+    if (origAlpha[btmIdx] < 85 && !isBg[btmIdx]) { isBg[btmIdx] = 1; bgQueue.push(btmIdx); }
   }
   for (let y = 0; y < h; y++) {
     const leftIdx = y * w;
     const rightIdx = y * w + (w - 1);
-    if (origAlpha[leftIdx] < 60 && !isExternalBg[leftIdx]) {
-      isExternalBg[leftIdx] = 1;
-      bgQueue.push(leftIdx);
-    }
-    if (origAlpha[rightIdx] < 60 && !isExternalBg[rightIdx]) {
-      isExternalBg[rightIdx] = 1;
-      bgQueue.push(rightIdx);
-    }
+    if (origAlpha[leftIdx] < 85 && !isBg[leftIdx]) { isBg[leftIdx] = 1; bgQueue.push(leftIdx); }
+    if (origAlpha[rightIdx] < 85 && !isBg[rightIdx]) { isBg[rightIdx] = 1; bgQueue.push(rightIdx); }
   }
 
-  let bgHead = 0;
-  while (bgHead < bgQueue.length) {
-    const curr = bgQueue[bgHead++];
-    const cx = curr % w;
-    const cy = Math.floor(curr / w);
-
-    const neighbors = [
-      cy > 0 ? (cy - 1) * w + cx : -1,
-      cy < h - 1 ? (cy + 1) * w + cx : -1,
-      cx > 0 ? cy * w + (cx - 1) : -1,
-      cx < w - 1 ? cy * w + (cx + 1) : -1,
-    ];
-
-    for (const n of neighbors) {
-      if (n !== -1 && isExternalBg[n] === 0 && origAlpha[n] < 85) {
-        isExternalBg[n] = 1;
-        bgQueue.push(n);
-      }
-    }
-  }
-
-  // Step 2: 100% Protection for Internal Subject (Shirts, ties, teeth, skin, glasses)
-  for (let i = 0; i < numPixels; i++) {
-    if (isExternalBg[i] === 0 && origAlpha[i] > 10) {
-      if (origAlpha[i] < 240) {
-        data[i * 4 + 3] = 255;
-      }
-    }
-  }
-
-  // Step 3: Compute Distance from External Background (up to 5 pixels depth)
+  // 3. Compute Euclidean Distance from Nearest Background (External or Hair Hole)
   const distToBg = new Float32Array(numPixels);
   distToBg.fill(999);
   const distQueue: number[] = [];
 
   for (let i = 0; i < numPixels; i++) {
-    if (isExternalBg[i] === 1) {
+    if (isBg[i] === 1) {
       distToBg[i] = 0;
       distQueue.push(i);
     }
@@ -261,7 +233,7 @@ export function cleanAndDefringeEdges(
   while (distHead < distQueue.length) {
     const curr = distQueue[distHead++];
     const curDist = distToBg[curr];
-    if (curDist >= 5) continue; // Only need accurate distance up to 5 pixels
+    if (curDist >= 6) continue;
 
     const cx = curr % w;
     const cy = Math.floor(curr / w);
@@ -275,8 +247,8 @@ export function cleanAndDefringeEdges(
         if (nx < 0 || nx >= w) continue;
 
         const nIdx = ny * w + nx;
-        const stepDist = (dx !== 0 && dy !== 0) ? 1.414 : 1.0;
-        const newDist = curDist + stepDist;
+        const step = (dx !== 0 && dy !== 0) ? 1.414 : 1.0;
+        const newDist = curDist + step;
 
         if (newDist < distToBg[nIdx]) {
           distToBg[nIdx] = newDist;
@@ -286,33 +258,30 @@ export function cleanAndDefringeEdges(
     }
   }
 
-  // Step 4: Color Decontamination & Edge Inpainting (The Remove.bg Secret)
-  // Identify Core Subject Pixels (deep enough inside the subject with solid alpha)
-  const coreMap = new Uint8Array(numPixels);
+  // 4. Identify Solid Core Foreground Pixels for Color Decontamination
   const nearestCorePixel = new Int32Array(numPixels);
   nearestCorePixel.fill(-1);
   const coreQueue: number[] = [];
 
   for (let i = 0; i < numPixels; i++) {
-    if (isExternalBg[i] === 0 && distToBg[i] >= 3.0 && data[i * 4 + 3] >= 230) {
-      coreMap[i] = 1;
+    // Solid subject core: far from background and high opacity
+    if (isBg[i] === 0 && distToBg[i] >= 2.5 && origAlpha[i] >= 220) {
       nearestCorePixel[i] = i;
       coreQueue.push(i);
     }
   }
 
-  // If no deep core (e.g. very thin subject), use any solid foreground pixel
+  // Fallback if no deep core (e.g. very thin strands)
   if (coreQueue.length === 0) {
     for (let i = 0; i < numPixels; i++) {
-      if (isExternalBg[i] === 0 && data[i * 4 + 3] >= 200) {
-        coreMap[i] = 1;
+      if (isBg[i] === 0 && origAlpha[i] >= 180) {
         nearestCorePixel[i] = i;
         coreQueue.push(i);
       }
     }
   }
 
-  // Propagate pure Core Foreground Color outwards onto all boundary pixels (distToBg < 3.5)
+  // Propagate pure Core Foreground Color outwards into hair strands & border pixels
   let coreHead = 0;
   while (coreHead < coreQueue.length) {
     const curr = coreQueue[coreHead++];
@@ -329,8 +298,7 @@ export function cleanAndDefringeEdges(
         if (nx < 0 || nx >= w) continue;
 
         const nIdx = ny * w + nx;
-        // Only propagate into subject boundary pixels
-        if (isExternalBg[nIdx] === 0 && nearestCorePixel[nIdx] === -1 && distToBg[nIdx] < 3.5) {
+        if (nearestCorePixel[nIdx] === -1 && distToBg[nIdx] < 4.0) {
           nearestCorePixel[nIdx] = srcCore;
           coreQueue.push(nIdx);
         }
@@ -338,54 +306,73 @@ export function cleanAndDefringeEdges(
     }
   }
 
-  // Apply Inpainted Color to Boundary Pixels to completely wipe out original white/light background bleed
+  // 5. Inpaint pure subject/hair RGB into semi-transparent border & hair gap pixels
   if (defringe) {
     for (let i = 0; i < numPixels; i++) {
-      if (isExternalBg[i] === 0 && distToBg[i] < 3.0) {
+      if (isBg[i] === 0 && distToBg[i] < 3.5) {
         const coreSrc = nearestCorePixel[i];
         if (coreSrc !== -1 && coreSrc !== i) {
-          // Replace contaminated RGB with pure core subject color
-          data[i * 4] = data[coreSrc * 4];
-          data[i * 4 + 1] = data[coreSrc * 4 + 1];
-          data[i * 4 + 2] = data[coreSrc * 4 + 2];
+          const coreR = data[coreSrc * 4];
+          const coreG = data[coreSrc * 4 + 1];
+          const coreB = data[coreSrc * 4 + 2];
+
+          // Check if pixel is contaminated with light/white background
+          const curR = data[i * 4];
+          const curG = data[i * 4 + 1];
+          const curB = data[i * 4 + 2];
+          const curBrightness = (curR + curG + curB) / 3;
+          const coreBrightness = (coreR + coreG + coreB) / 3;
+
+          // If pixel was contaminated by brighter background, replace with pure hair/subject color
+          if (curBrightness > coreBrightness + 15 || origAlpha[i] < 200) {
+            data[i * 4] = coreR;
+            data[i * 4 + 1] = coreG;
+            data[i * 4 + 2] = coreB;
+          }
         }
       }
     }
   }
 
-  // Step 5: Studio-Grade Sub-Pixel Edge Shaping (Crisp, Anti-Aliased, No White Fringes)
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      const idx = y * w + x;
-      if (isExternalBg[idx] === 1) {
-        data[idx * 4 + 3] = 0;
-        continue;
-      }
+  // 6. Studio-Grade Alpha Matting for Hair and Body
+  const effectiveErode = Math.max(0.4, erodeRadius);
+  for (let i = 0; i < numPixels; i++) {
+    if (isBg[i] === 1) {
+      data[i * 4 + 3] = 0;
+      continue;
+    }
 
-      const dist = distToBg[idx];
-      let a = data[idx * 4 + 3];
+    const dist = distToBg[i];
+    const rawA = origAlpha[i];
 
-      // Erode (contract edge inward if erodeRadius > 0 or auto-clean outermost 0.8px)
-      const effectiveErode = Math.max(0.6, erodeRadius);
-      if (dist < effectiveErode) {
-        // Outermost fringe layer -> make transparent
-        a = 0;
-      } else if (dist < effectiveErode + 1.2) {
-        // Transition antialiasing zone
-        const t = (dist - effectiveErode) / 1.2;
-        // Smoothstep curve for silky smooth anti-aliased edge
-        const smoothAlpha = t * t * (3 - 2 * t);
-        a = Math.min(255, Math.max(0, Math.round(smoothAlpha * 255)));
-      } else {
-        // Solid subject body
-        a = 255;
-      }
+    if (dist < effectiveErode) {
+      // Outermost background spill layer
+      data[i * 4 + 3] = 0;
+    } else if (dist >= 3.0 && rawA >= 220) {
+      // 100% Solid internal subject (clothes, skin, face, teeth, thick hair)
+      data[i * 4 + 3] = 255;
+    } else {
+      // Hair strand / edge transition zone: Smooth anti-aliased alpha
+      const t = Math.min(1.0, Math.max(0, (dist - effectiveErode) / 1.5));
+      const distAlpha = t * t * (3 - 2 * t); // smoothstep
+      const rawAlphaNorm = Math.min(1.0, Math.max(0, (rawA - 30) / 195));
 
-      data[idx * 4 + 3] = a;
+      // Combine distance confidence with raw hair strand density
+      const blendedNorm = distAlpha * 0.4 + rawAlphaNorm * 0.6;
+      
+      // Sigmoid sharpness contrast curve
+      const steepFactor = 3.0 + (sharpness / 100) * 8.0;
+      const sharpNorm = 1 / (1 + Math.exp(-steepFactor * (blendedNorm - 0.42)));
+      
+      let finalA = Math.round(sharpNorm * 255);
+      if (finalA > 225) finalA = 255;
+      if (finalA < 18) finalA = 0;
+
+      data[i * 4 + 3] = Math.min(255, Math.max(0, finalA));
     }
   }
 
-  // Step 6: Edge Unsharp Masking on Outer Contour
+  // 7. Edge Unsharp Masking on Outer Contour & Hair Outlines
   if (sharpness > 20) {
     const sharpWeight = Math.min(0.6, (sharpness / 100) * 0.5);
     const copyData = new Uint8ClampedArray(data);
@@ -395,7 +382,7 @@ export function cleanAndDefringeEdges(
         const idx = (y * w + x) * 4;
         const a = copyData[idx + 3];
 
-        if (a >= 80 && a <= 250) {
+        if (a >= 70 && a <= 250) {
           for (let c = 0; c < 3; c++) {
             const center = copyData[idx + c];
             const top = copyData[((y - 1) * w + x) * 4 + c];
