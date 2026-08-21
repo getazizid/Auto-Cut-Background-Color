@@ -50,6 +50,7 @@ export default function App() {
     concurrency: 2,
     edgeDefringe: true,
     edgeErode: 0,
+    edgeSharpness: 85,
   });
 
   // Track processing cancellation
@@ -82,6 +83,7 @@ export default function App() {
             contrast: 0,
             edgeDefringe: settings.edgeDefringe,
             edgeErode: settings.edgeErode,
+            edgeSharpness: settings.edgeSharpness,
           });
         } catch (err) {
           console.error('Error reading file:', file.name, err);
@@ -125,6 +127,7 @@ export default function App() {
         contrast: item.contrast,
         edgeDefringe: item.edgeDefringe ?? settings.edgeDefringe,
         edgeErode: item.edgeErode ?? settings.edgeErode,
+        edgeSharpness: item.edgeSharpness ?? settings.edgeSharpness,
         exportFormat: settings.exportFormat,
         jpegQuality: settings.jpegQuality,
       });
@@ -231,6 +234,7 @@ export default function App() {
         contrast: item.contrast,
         edgeDefringe: item.edgeDefringe ?? settings.edgeDefringe,
         edgeErode: item.edgeErode ?? settings.edgeErode,
+        edgeSharpness: item.edgeSharpness ?? settings.edgeSharpness,
         exportFormat: settings.exportFormat,
         jpegQuality: settings.jpegQuality,
       });
@@ -252,6 +256,7 @@ export default function App() {
           customFitMode: settings.fitMode,
           edgeDefringe: settings.edgeDefringe,
           edgeErode: settings.edgeErode,
+          edgeSharpness: settings.edgeSharpness,
         };
         if (newItem.noBgDataUrl) {
           const resultUrl = await renderCompositedPhoto({
@@ -268,6 +273,7 @@ export default function App() {
             contrast: newItem.contrast,
             edgeDefringe: settings.edgeDefringe,
             edgeErode: settings.edgeErode,
+            edgeSharpness: settings.edgeSharpness,
             exportFormat: settings.exportFormat,
             jpegQuality: settings.jpegQuality,
           });

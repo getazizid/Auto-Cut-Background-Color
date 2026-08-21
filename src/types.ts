@@ -50,6 +50,7 @@ export interface ImageItem {
   contrast: number; // -50 to 50
   edgeDefringe?: boolean; // Anti-halo / defringe edge cleanup
   edgeErode?: number; // 0 to 3px alpha edge contraction to eliminate white border artifacts
+  edgeSharpness?: number; // 0 to 100% edge crispness & sharpness boost
 }
 
 export interface GlobalSettings {
@@ -63,6 +64,7 @@ export interface GlobalSettings {
   concurrency: number;
   edgeDefringe: boolean;
   edgeErode: number;
+  edgeSharpness: number;
 }
 
 export interface PrintSheetItem {

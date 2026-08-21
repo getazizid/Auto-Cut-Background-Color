@@ -109,25 +109,48 @@ export const GlobalControls: React.FC<GlobalControlsProps> = ({
           </div>
         </div>
 
-        {/* Global Edge Defringe Switch */}
-        <div className="flex items-center justify-between p-2.5 bg-slate-50 rounded-xl border border-slate-200">
-          <div>
-            <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
-              <Sparkles className="w-3.5 h-3.5 text-amber-600" />
-              <span>{lang === 'id' ? 'Pembersih Pinggiran Putih Otomatis' : 'Auto Edge Defringe (Anti-Halo)'}</span>
-            </span>
-            <p className="text-[10px] text-slate-500 mt-0.5">
-              {lang === 'id'
-                ? 'Hilangkan halo putih/abu-abu di batas rambut dan pakaian'
-                : 'Refines alpha cutout to eliminate light background fringe'}
-            </p>
+        {/* Global Edge Defringe & Sharpness */}
+        <div className="p-2.5 bg-slate-50 rounded-xl border border-slate-200 space-y-2">
+          <div className="flex items-center justify-between">
+            <div>
+              <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                <Sparkles className="w-3.5 h-3.5 text-amber-600" />
+                <span>{lang === 'id' ? 'Ketajaman & Anti-Halo Tepi' : 'Crisp Edge & Anti-Halo'}</span>
+              </span>
+              <p className="text-[10px] text-slate-500 mt-0.5">
+                {lang === 'id'
+                  ? 'Pertajam potongan tepi & bersihkan pendaran putih'
+                  : 'Crisp subject contour & defringe background halos'}
+              </p>
+            </div>
+            <input
+              type="checkbox"
+              checked={settings.edgeDefringe}
+              onChange={(e) => onUpdateSettings({ edgeDefringe: e.target.checked })}
+              className="w-4 h-4 accent-red-600 rounded cursor-pointer"
+            />
           </div>
-          <input
-            type="checkbox"
-            checked={settings.edgeDefringe}
-            onChange={(e) => onUpdateSettings({ edgeDefringe: e.target.checked })}
-            className="w-4 h-4 accent-red-600 rounded cursor-pointer"
-          />
+
+          <div>
+            <div className="flex justify-between text-[11px] font-semibold text-slate-700 mb-1">
+              <span>{lang === 'id' ? 'Ketajaman Garis Potong' : 'Contour Sharpness'}</span>
+              <span className="text-slate-500 font-mono">{settings.edgeSharpness}%</span>
+            </div>
+            <input
+              type="range"
+              min="0"
+              max="100"
+              step="5"
+              value={settings.edgeSharpness}
+              onChange={(e) => onUpdateSettings({ edgeSharpness: parseInt(e.target.value) })}
+              className="w-full accent-red-600 cursor-pointer"
+            />
+            <div className="flex justify-between text-[9px] text-slate-400">
+              <span>Halus (0%)</span>
+              <span>Standar (50%)</span>
+              <span>Ekstra Tajam (85%)</span>
+            </div>
+          </div>
         </div>
       </div>
 

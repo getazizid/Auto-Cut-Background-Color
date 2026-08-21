@@ -60,6 +60,7 @@ export const ImageDetailModal: React.FC<ImageDetailModalProps> = ({
   const [contrast, setContrast] = useState<number>(item.contrast || 0);
   const [edgeDefringe, setEdgeDefringe] = useState<boolean>(item.edgeDefringe ?? true);
   const [edgeErode, setEdgeErode] = useState<number>(item.edgeErode ?? 0);
+  const [edgeSharpness, setEdgeSharpness] = useState<number>(item.edgeSharpness ?? 85);
 
   // Trigger live re-rendering when sliders or background changes
   useEffect(() => {
@@ -81,6 +82,7 @@ export const ImageDetailModal: React.FC<ImageDetailModalProps> = ({
           contrast,
           edgeDefringe,
           edgeErode,
+          edgeSharpness,
           exportFormat: 'image/png',
         });
         if (!isCancelled) {
@@ -98,6 +100,7 @@ export const ImageDetailModal: React.FC<ImageDetailModalProps> = ({
             contrast,
             edgeDefringe,
             edgeErode,
+            edgeSharpness,
             resultDataUrl: url,
           });
         }
@@ -112,7 +115,7 @@ export const ImageDetailModal: React.FC<ImageDetailModalProps> = ({
     return () => {
       isCancelled = true;
     };
-  }, [customBg, customSize, fitMode, scale, offsetX, offsetY, feathering, brightness, contrast, edgeDefringe, edgeErode, item.noBgDataUrl]);
+  }, [customBg, customSize, fitMode, scale, offsetX, offsetY, feathering, brightness, contrast, edgeDefringe, edgeErode, edgeSharpness, item.noBgDataUrl]);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 bg-slate-950/70 backdrop-blur-sm animate-fade-in">
@@ -417,6 +420,29 @@ export const ImageDetailModal: React.FC<ImageDetailModalProps> = ({
                       <span>3px (Ketat)</span>
                     </div>
                   </div>
+
+                  {/* Edge Sharpness & Crispness Boost */}
+                  <div className="pt-2 border-t border-slate-200">
+                    <div className="flex justify-between font-semibold text-slate-700 mb-1">
+                      <span>{lang === 'id' ? 'Ketajaman Potongan Tepi' : 'Edge Cut Crispness & Sharpness'}</span>
+                      <span className="text-slate-500 font-mono">{edgeSharpness}%</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="0"
+                      max="100"
+                      step="5"
+                      value={edgeSharpness}
+                      onChange={(e) => setEdgeSharpness(parseInt(e.target.value))}
+                      className="w-full accent-red-600 cursor-pointer"
+                    />
+                    <div className="flex justify-between text-[9px] text-slate-400">
+                      <span>Lembut (0%)</span>
+                      <span>Standar (50%)</span>
+                      <span>Tajam (85%)</span>
+                      <span>Sangat Tajam (100%)</span>
+                    </div>
+                  </div>
                 </div>
 
                 {/* Reset button */}
@@ -431,6 +457,7 @@ export const ImageDetailModal: React.FC<ImageDetailModalProps> = ({
                     setContrast(0);
                     setEdgeDefringe(true);
                     setEdgeErode(0);
+                    setEdgeSharpness(85);
                   }}
                   className="w-full py-1.5 text-xs font-semibold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors"
                 >

@@ -156,7 +156,8 @@ export async function fallbackRemoveBackground(imageSource: string | File | Blob
 /**
  * Refines the alpha mask / foreground edges of a transparent PNG subject image:
  * - Edge Defringing (Color bleeding into semi-transparent border pixels to prevent white/light halo)
- * - Alpha thresholding & smoothing (removes low-alpha white fringes)
+ * - Alpha Sigmoid Sharpness Boost (Converts blurry transition zones into razor-sharp, crisp borders)
+ * - Border Unsharp Masking (Crispens high-frequency subject edge textures like hair & collar)
  * - Optional mask erosion / edge contraction to eliminate background spill
  */
 export function cleanAndDefringeEdges(
@@ -164,10 +165,11 @@ export function cleanAndDefringeEdges(
   options: {
     erodeRadius?: number; // 0 to 3 pixels inward contraction
     defringe?: boolean;   // Clamps alpha & suppresses bright white edge halos
+    sharpness?: number;   // 0 to 100% sharpness boost
     feather?: number;     // Soft feathering
   } = {}
 ) {
-  const { erodeRadius = 1, defringe = true } = options;
+  const { erodeRadius = 1, defringe = true, sharpness = 80 } = options;
   const ctx = canvas.getContext('2d');
   if (!ctx) return;
 
@@ -181,27 +183,44 @@ export function cleanAndDefringeEdges(
     origAlpha[i] = data[i * 4 + 3];
   }
 
-  // 1. Defringe: Remove faint semi-transparent white/gray halo around subject edges
-  if (defringe) {
+  // 1. Defringe & Alpha Sharpening: Remove faint white/gray halo and steepen blurry alpha curve
+  if (defringe || sharpness > 0) {
+    // Sigmoid steepness calculation based on sharpness (0 to 100 -> factor 4 to 22)
+    const factor = 4 + (sharpness / 100) * 18;
+
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < w; x++) {
         const i = (y * w + x) * 4;
-        const a = data[i + 3];
+        let a = data[i + 3];
 
-        if (a > 0 && a < 254) {
+        if (a > 0 && a < 255) {
           const r = data[i];
           const g = data[i + 1];
           const b = data[i + 2];
-
-          // If the edge pixel is very bright/white (typical background spill artifact)
           const brightness = (r + g + b) / 3;
-          if (brightness > 190 && a < 200) {
-            // Sharpen cutoff on faint white halos
-            data[i + 3] = a < 80 ? 0 : Math.round(a * 0.6);
-          } else if (a < 35) {
-            // Cutoff noisy stray alpha pixels
-            data[i + 3] = 0;
+
+          // Defringe: Aggressively eliminate white/light background bleeding on semi-transparent pixels
+          if (defringe) {
+            if (brightness > 185 && a < 210) {
+              a = a < 100 ? 0 : Math.round(a * 0.45);
+            } else if (a < 40) {
+              a = 0;
+            }
           }
+
+          // Edge Sharpness: Steepen alpha curve to make edges ultra crisp & eliminate foggy edges
+          if (a > 0 && sharpness > 0) {
+            const norm = a / 255;
+            // Sigmoid contrast curve centered at 0.5
+            const sharpNorm = 1 / (1 + Math.exp(-factor * (norm - 0.48)));
+            a = Math.min(255, Math.max(0, Math.round(sharpNorm * 255)));
+
+            // High alpha cutoff for solid silhouette
+            if (a > 225) a = 255;
+            if (a < 20) a = 0;
+          }
+
+          data[i + 3] = a;
         }
       }
     }
@@ -209,11 +228,16 @@ export function cleanAndDefringeEdges(
 
   // 2. Alpha Erosion: Shrink alpha mask by `erodeRadius` pixels to completely swallow outer edge halos
   if (erodeRadius > 0) {
+    const currentAlpha = new Uint8Array(w * h);
+    for (let i = 0; i < w * h; i++) {
+      currentAlpha[i] = data[i * 4 + 3];
+    }
+
     const erodedAlpha = new Uint8Array(w * h);
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < w; x++) {
         const idx = y * w + x;
-        let minAlpha = origAlpha[idx];
+        let minAlpha = currentAlpha[idx];
 
         if (minAlpha > 0) {
           for (let dy = -erodeRadius; dy <= erodeRadius; dy++) {
@@ -229,7 +253,7 @@ export function cleanAndDefringeEdges(
                 break;
               }
               if (dx * dx + dy * dy <= erodeRadius * erodeRadius) {
-                const neighborA = origAlpha[ny * w + nx];
+                const neighborA = currentAlpha[ny * w + nx];
                 if (neighborA < minAlpha) minAlpha = neighborA;
               }
             }
@@ -253,7 +277,7 @@ export function cleanAndDefringeEdges(
       const idx = (y * w + x) * 4;
       const a = data[idx + 3];
 
-      if (a > 0 && a < 220) {
+      if (a > 0 && a < 230) {
         // Look around for a strong opaque neighbor
         let bestR = data[idx];
         let bestG = data[idx + 1];
@@ -285,6 +309,41 @@ export function cleanAndDefringeEdges(
     }
   }
 
+  // 4. Edge Unsharp Masking: Apply crisp high-pass sharpening on pixels adjacent to border
+  if (sharpness > 20) {
+    const sharpWeight = Math.min(1.2, (sharpness / 100) * 1.0);
+    const copyData = new Uint8ClampedArray(data);
+
+    for (let y = 1; y < h - 1; y++) {
+      for (let x = 1; x < w - 1; x++) {
+        const idx = (y * w + x) * 4;
+        const a = copyData[idx + 3];
+
+        // Apply on edge perimeter pixels (where alpha is transitioning or bordering transparent area)
+        if (a >= 60) {
+          const topA = copyData[((y - 1) * w + x) * 4 + 3];
+          const btmA = copyData[((y + 1) * w + x) * 4 + 3];
+          const lftA = copyData[(y * w + (x - 1)) * 4 + 3];
+          const rgtA = copyData[(y * w + (x + 1)) * 4 + 3];
+
+          if (topA < 240 || btmA < 240 || lftA < 240 || rgtA < 240) {
+            for (let c = 0; c < 3; c++) {
+              const center = copyData[idx + c];
+              const top = copyData[((y - 1) * w + x) * 4 + c];
+              const btm = copyData[((y + 1) * w + x) * 4 + c];
+              const lft = copyData[(y * w + (x - 1)) * 4 + c];
+              const rgt = copyData[(y * w + (x + 1)) * 4 + c];
+
+              const laplacian = 4 * center - top - btm - lft - rgt;
+              const sharpenedVal = center + sharpWeight * laplacian;
+              data[idx + c] = Math.min(255, Math.max(0, Math.round(sharpenedVal)));
+            }
+          }
+        }
+      }
+    }
+  }
+
   ctx.putImageData(imgData, 0, 0);
 }
 
@@ -294,7 +353,8 @@ export function cleanAndDefringeEdges(
 export async function refineSubjectEdges(
   dataUrl: string,
   erodeRadius: number = 1,
-  defringe: boolean = true
+  defringe: boolean = true,
+  sharpness: number = 80
 ): Promise<string> {
   const img = await loadImage(dataUrl);
   const canvas = document.createElement('canvas');
@@ -305,7 +365,7 @@ export async function refineSubjectEdges(
   if (!ctx) return dataUrl;
 
   ctx.drawImage(img, 0, 0);
-  cleanAndDefringeEdges(canvas, { erodeRadius, defringe });
+  cleanAndDefringeEdges(canvas, { erodeRadius, defringe, sharpness });
 
   return canvas.toDataURL('image/png');
 }
@@ -337,8 +397,8 @@ export async function executeBackgroundRemoval(
     if (onProgress) onProgress(90);
     const rawDataUrl = await fileToDataUrl(blob);
     
-    // Auto-clean & Defringe edges to eliminate white fringes/halos completely
-    const refinedDataUrl = await refineSubjectEdges(rawDataUrl, 1, true);
+    // Auto-clean, sharpen & Defringe edges to eliminate white fringes/halos completely
+    const refinedDataUrl = await refineSubjectEdges(rawDataUrl, 1, true, 85);
 
     if (onProgress) onProgress(100);
     return refinedDataUrl;
@@ -348,7 +408,7 @@ export async function executeBackgroundRemoval(
     // Fallback to Canvas-based segmentation
     const fallbackBlob = await fallbackRemoveBackground(imageSource);
     const rawDataUrl = await fileToDataUrl(fallbackBlob);
-    const refinedDataUrl = await refineSubjectEdges(rawDataUrl, 1, true);
+    const refinedDataUrl = await refineSubjectEdges(rawDataUrl, 1, true, 85);
     if (onProgress) onProgress(100);
     return refinedDataUrl;
   }
@@ -371,6 +431,7 @@ export async function renderCompositedPhoto({
   contrast = 0,
   edgeDefringe = true,
   edgeErode = 0,
+  edgeSharpness = 80,
   exportFormat = 'image/jpeg',
   jpegQuality = 0.92,
 }: {
@@ -387,13 +448,14 @@ export async function renderCompositedPhoto({
   contrast?: number;
   edgeDefringe?: boolean;
   edgeErode?: number;
+  edgeSharpness?: number;
   exportFormat?: 'image/png' | 'image/jpeg' | 'image/webp';
   jpegQuality?: number;
 }): Promise<string> {
-  // If user requested custom edge contraction (erode) or defringe toggling in detail modal
+  // If user requested custom edge contraction (erode), sharpness, or defringe toggling in detail modal
   let processedSubjectUrl = noBgImageUrl;
-  if (edgeErode > 0) {
-    processedSubjectUrl = await refineSubjectEdges(noBgImageUrl, edgeErode, edgeDefringe);
+  if (edgeErode > 0 || edgeSharpness !== 80 || !edgeDefringe) {
+    processedSubjectUrl = await refineSubjectEdges(noBgImageUrl, edgeErode, edgeDefringe, edgeSharpness);
   }
 
   const subjectImg = await loadImage(processedSubjectUrl);
