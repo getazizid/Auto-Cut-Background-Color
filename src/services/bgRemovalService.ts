@@ -155,21 +155,21 @@ export async function fallbackRemoveBackground(imageSource: string | File | Blob
 
 /**
  * Refines the alpha mask / foreground edges of a transparent PNG subject image:
- * - Edge Defringing (Color bleeding into semi-transparent border pixels to prevent white/light halo)
- * - Alpha Sigmoid Sharpness Boost (Converts blurry transition zones into razor-sharp, crisp borders)
- * - Border Unsharp Masking (Crispens high-frequency subject edge textures like hair & collar)
- * - Optional mask erosion / edge contraction to eliminate background spill
+ * - Interior Hole Filling & Subject Core Protection (ensures no parts inside the subject are cut or eroded)
+ * - True Perimeter-Only Defringing & Crisp Edge Boundary
+ * - Color Bleeding onto true outer semi-transparent pixels (kills white halos without cutting subject)
+ * - Safe Boundary Unsharp Masking
  */
 export function cleanAndDefringeEdges(
   canvas: HTMLCanvasElement,
   options: {
-    erodeRadius?: number; // 0 to 3 pixels inward contraction
+    erodeRadius?: number; // 0 to 3 pixels inward contraction (perimeter only)
     defringe?: boolean;   // Clamps alpha & suppresses bright white edge halos
     sharpness?: number;   // 0 to 100% sharpness boost
     feather?: number;     // Soft feathering
   } = {}
 ) {
-  const { erodeRadius = 1, defringe = true, sharpness = 80 } = options;
+  const { erodeRadius = 0, defringe = true, sharpness = 70 } = options;
   const ctx = canvas.getContext('2d');
   if (!ctx) return;
 
@@ -177,108 +177,177 @@ export function cleanAndDefringeEdges(
   const h = canvas.height;
   const imgData = ctx.getImageData(0, 0, w, h);
   const data = imgData.data;
-  const origAlpha = new Uint8Array(w * h);
+  const numPixels = w * h;
 
-  for (let i = 0; i < w * h; i++) {
+  // Track original alpha
+  const origAlpha = new Uint8Array(numPixels);
+  for (let i = 0; i < numPixels; i++) {
     origAlpha[i] = data[i * 4 + 3];
   }
 
-  // 1. Defringe & Alpha Sharpening: Remove faint white/gray halo and steepen blurry alpha curve
-  if (defringe || sharpness > 0) {
-    // Sigmoid steepness calculation based on sharpness (0 to 100 -> factor 4 to 22)
-    const factor = 4 + (sharpness / 100) * 18;
+  // Step 1: Detect True External Background vs Internal Subject
+  // We run a flood fill / connected component from the image borders where alpha == 0
+  // This guarantees that any pixel not reachable from the outside canvas borders is an INTERNAL subject detail!
+  const isExternalBackground = new Uint8Array(numPixels);
+  const queue: number[] = [];
 
-    for (let y = 0; y < h; y++) {
-      for (let x = 0; x < w; x++) {
-        const i = (y * w + x) * 4;
-        let a = data[i + 3];
+  // Initialize queue with outer canvas boundary pixels that are transparent
+  for (let x = 0; x < w; x++) {
+    const topIdx = x;
+    const btmIdx = (h - 1) * w + x;
+    if (origAlpha[topIdx] < 50) {
+      isExternalBackground[topIdx] = 1;
+      queue.push(topIdx);
+    }
+    if (origAlpha[btmIdx] < 50) {
+      isExternalBackground[btmIdx] = 1;
+      queue.push(btmIdx);
+    }
+  }
+  for (let y = 0; y < h; y++) {
+    const leftIdx = y * w;
+    const rightIdx = y * w + (w - 1);
+    if (origAlpha[leftIdx] < 50 && !isExternalBackground[leftIdx]) {
+      isExternalBackground[leftIdx] = 1;
+      queue.push(leftIdx);
+    }
+    if (origAlpha[rightIdx] < 50 && !isExternalBackground[rightIdx]) {
+      isExternalBackground[rightIdx] = 1;
+      queue.push(rightIdx);
+    }
+  }
 
-        if (a > 0 && a < 255) {
-          const r = data[i];
-          const g = data[i + 1];
-          const b = data[i + 2];
-          const brightness = (r + g + b) / 3;
+  let head = 0;
+  while (head < queue.length) {
+    const curr = queue[head++];
+    const cx = curr % w;
+    const cy = Math.floor(curr / w);
 
-          // Defringe: Aggressively eliminate white/light background bleeding on semi-transparent pixels
-          if (defringe) {
-            if (brightness > 185 && a < 210) {
-              a = a < 100 ? 0 : Math.round(a * 0.45);
-            } else if (a < 40) {
-              a = 0;
-            }
-          }
+    const neighbors = [
+      cy > 0 ? (cy - 1) * w + cx : -1,
+      cy < h - 1 ? (cy + 1) * w + cx : -1,
+      cx > 0 ? cy * w + (cx - 1) : -1,
+      cx < w - 1 ? cy * w + (cx + 1) : -1,
+    ];
 
-          // Edge Sharpness: Steepen alpha curve to make edges ultra crisp & eliminate foggy edges
-          if (a > 0 && sharpness > 0) {
-            const norm = a / 255;
-            // Sigmoid contrast curve centered at 0.5
-            const sharpNorm = 1 / (1 + Math.exp(-factor * (norm - 0.48)));
-            a = Math.min(255, Math.max(0, Math.round(sharpNorm * 255)));
-
-            // High alpha cutoff for solid silhouette
-            if (a > 225) a = 255;
-            if (a < 20) a = 0;
-          }
-
-          data[i + 3] = a;
-        }
+    for (const n of neighbors) {
+      if (n !== -1 && isExternalBackground[n] === 0 && origAlpha[n] < 80) {
+        isExternalBackground[n] = 1;
+        queue.push(n);
       }
     }
   }
 
-  // 2. Alpha Erosion: Shrink alpha mask by `erodeRadius` pixels to completely swallow outer edge halos
-  if (erodeRadius > 0) {
-    const currentAlpha = new Uint8Array(w * h);
-    for (let i = 0; i < w * h; i++) {
-      currentAlpha[i] = data[i * 4 + 3];
+  // Step 2: Protect ALL internal pixels (holes/buttons/ties/teeth/glasses/texture) from accidental cutoff
+  for (let i = 0; i < numPixels; i++) {
+    // If a pixel is NOT external background and has any opacity, preserve its solid alpha!
+    if (isExternalBackground[i] === 0 && origAlpha[i] > 10) {
+      if (origAlpha[i] < 240) {
+        // Restore opacity for accidentally semi-transparent interior details (e.g. white shirts, shiny hair, glasses)
+        data[i * 4 + 3] = Math.max(origAlpha[i], 255);
+      }
     }
+  }
 
-    const erodedAlpha = new Uint8Array(w * h);
+  // Step 3: Defringe ONLY at true outer boundary where subject touches external background
+  if (defringe || sharpness > 0) {
+    const steepFactor = 3 + (sharpness / 100) * 12;
+
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < w; x++) {
         const idx = y * w + x;
-        let minAlpha = currentAlpha[idx];
+        const pIdx = idx * 4;
+        let a = data[pIdx + 3];
 
-        if (minAlpha > 0) {
-          for (let dy = -erodeRadius; dy <= erodeRadius; dy++) {
-            const ny = y + dy;
-            if (ny < 0 || ny >= h) {
-              minAlpha = 0;
-              break;
-            }
-            for (let dx = -erodeRadius; dx <= erodeRadius; dx++) {
+        if (a > 0 && a < 255) {
+          // Check if this pixel is on the outer boundary (neighbors external background)
+          let touchesOuterBg = false;
+          const offsets = [-1, 0, 1];
+          for (const dy of offsets) {
+            for (const dx of offsets) {
+              const ny = y + dy;
               const nx = x + dx;
-              if (nx < 0 || nx >= w) {
-                minAlpha = 0;
-                break;
-              }
-              if (dx * dx + dy * dy <= erodeRadius * erodeRadius) {
-                const neighborA = currentAlpha[ny * w + nx];
-                if (neighborA < minAlpha) minAlpha = neighborA;
+              if (ny >= 0 && ny < h && nx >= 0 && nx < w) {
+                if (isExternalBackground[ny * w + nx] === 1) {
+                  touchesOuterBg = true;
+                  break;
+                }
               }
             }
-            if (minAlpha === 0) break;
+            if (touchesOuterBg) break;
+          }
+
+          if (touchesOuterBg) {
+            const r = data[pIdx];
+            const g = data[pIdx + 1];
+            const b = data[pIdx + 2];
+            const brightness = (r + g + b) / 3;
+
+            // Only defringe faint stray white halo pixels on the outermost contact border
+            if (defringe && brightness > 210 && a < 140) {
+              a = a < 70 ? 0 : Math.round(a * 0.7);
+            }
+
+            // Alpha curve steepening for crisp edges without biting into the subject
+            if (a > 0 && sharpness > 0) {
+              const norm = a / 255;
+              const sharpNorm = 1 / (1 + Math.exp(-steepFactor * (norm - 0.4)));
+              a = Math.min(255, Math.max(0, Math.round(sharpNorm * 255)));
+              if (a > 200) a = 255;
+              if (a < 15) a = 0;
+            }
+
+            data[pIdx + 3] = a;
           }
         }
-        erodedAlpha[idx] = minAlpha;
       }
-    }
-
-    // Apply eroded alpha back to image data
-    for (let i = 0; i < w * h; i++) {
-      data[i * 4 + 3] = erodedAlpha[i];
     }
   }
 
-  // 3. Color Bleed: For remaining semi-transparent border pixels, copy RGB from nearest opaque pixel
-  // to avoid white-fringing when blending onto solid red/blue backgrounds
+  // Step 4: Alpha Erosion (ONLY if explicitly set by user, applied only to outer perimeter)
+  if (erodeRadius > 0) {
+    const tempAlpha = new Uint8Array(numPixels);
+    for (let i = 0; i < numPixels; i++) {
+      tempAlpha[i] = data[i * 4 + 3];
+    }
+
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const idx = y * w + x;
+        // Only erode if pixel touches external background to NEVER erode internal objects
+        if (isExternalBackground[idx] === 0 && tempAlpha[idx] > 0) {
+          let minA = tempAlpha[idx];
+          for (let dy = -erodeRadius; dy <= erodeRadius; dy++) {
+            const ny = y + dy;
+            if (ny < 0 || ny >= h) continue;
+            for (let dx = -erodeRadius; dx <= erodeRadius; dx++) {
+              const nx = x + dx;
+              if (nx < 0 || nx >= w) continue;
+              if (dx * dx + dy * dy <= erodeRadius * erodeRadius) {
+                const nIdx = ny * w + nx;
+                if (isExternalBackground[nIdx] === 1) {
+                  minA = 0;
+                  break;
+                }
+              }
+            }
+            if (minA === 0) break;
+          }
+          if (minA === 0) {
+            data[idx * 4 + 3] = 0;
+          }
+        }
+      }
+    }
+  }
+
+  // Step 5: Color Bleed - Copy color from solid interior to outer edge transition pixels
   for (let y = 1; y < h - 1; y++) {
     for (let x = 1; x < w - 1; x++) {
       const idx = (y * w + x) * 4;
       const a = data[idx + 3];
 
-      if (a > 0 && a < 230) {
-        // Look around for a strong opaque neighbor
+      if (a > 0 && a < 240) {
         let bestR = data[idx];
         let bestG = data[idx + 1];
         let bestB = data[idx + 2];
@@ -289,7 +358,7 @@ export function cleanAndDefringeEdges(
           for (const dx of offsets) {
             if (dx === 0 && dy === 0) continue;
             const nIdx = ((y + dy) * w + (x + dx)) * 4;
-            if (data[nIdx + 3] >= 240) {
+            if (data[nIdx + 3] === 255) {
               bestR = data[nIdx];
               bestG = data[nIdx + 1];
               bestB = data[nIdx + 2];
@@ -309,9 +378,9 @@ export function cleanAndDefringeEdges(
     }
   }
 
-  // 4. Edge Unsharp Masking: Apply crisp high-pass sharpening on pixels adjacent to border
+  // Step 6: Edge Unsharp Masking ONLY on outer border pixels to prevent internal noise
   if (sharpness > 20) {
-    const sharpWeight = Math.min(1.2, (sharpness / 100) * 1.0);
+    const sharpWeight = Math.min(0.8, (sharpness / 100) * 0.7);
     const copyData = new Uint8ClampedArray(data);
 
     for (let y = 1; y < h - 1; y++) {
@@ -319,14 +388,14 @@ export function cleanAndDefringeEdges(
         const idx = (y * w + x) * 4;
         const a = copyData[idx + 3];
 
-        // Apply on edge perimeter pixels (where alpha is transitioning or bordering transparent area)
-        if (a >= 60) {
+        if (a >= 80) {
           const topA = copyData[((y - 1) * w + x) * 4 + 3];
           const btmA = copyData[((y + 1) * w + x) * 4 + 3];
           const lftA = copyData[(y * w + (x - 1)) * 4 + 3];
           const rgtA = copyData[(y * w + (x + 1)) * 4 + 3];
 
-          if (topA < 240 || btmA < 240 || lftA < 240 || rgtA < 240) {
+          // Only sharpen pixels that border transparency (contour)
+          if (topA < 220 || btmA < 220 || lftA < 220 || rgtA < 220) {
             for (let c = 0; c < 3; c++) {
               const center = copyData[idx + c];
               const top = copyData[((y - 1) * w + x) * 4 + c];
@@ -352,9 +421,9 @@ export function cleanAndDefringeEdges(
  */
 export async function refineSubjectEdges(
   dataUrl: string,
-  erodeRadius: number = 1,
+  erodeRadius: number = 0,
   defringe: boolean = true,
-  sharpness: number = 80
+  sharpness: number = 75
 ): Promise<string> {
   const img = await loadImage(dataUrl);
   const canvas = document.createElement('canvas');
@@ -397,8 +466,8 @@ export async function executeBackgroundRemoval(
     if (onProgress) onProgress(90);
     const rawDataUrl = await fileToDataUrl(blob);
     
-    // Auto-clean, sharpen & Defringe edges to eliminate white fringes/halos completely
-    const refinedDataUrl = await refineSubjectEdges(rawDataUrl, 1, true, 85);
+    // Auto-clean, sharpen & Defringe edges to eliminate white fringes/halos completely without cutting interior details
+    const refinedDataUrl = await refineSubjectEdges(rawDataUrl, 0, true, 75);
 
     if (onProgress) onProgress(100);
     return refinedDataUrl;
@@ -408,7 +477,7 @@ export async function executeBackgroundRemoval(
     // Fallback to Canvas-based segmentation
     const fallbackBlob = await fallbackRemoveBackground(imageSource);
     const rawDataUrl = await fileToDataUrl(fallbackBlob);
-    const refinedDataUrl = await refineSubjectEdges(rawDataUrl, 1, true, 85);
+    const refinedDataUrl = await refineSubjectEdges(rawDataUrl, 0, true, 75);
     if (onProgress) onProgress(100);
     return refinedDataUrl;
   }
