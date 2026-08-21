@@ -1,0 +1,6 @@
+{
+  "name": "AutoCut & Color - Bulk Background Remover",
+  "description": "Hapus latar belakang foto otomatis, ganti warna palet pas foto resmi/custom, ubah ukuran dimensi (2x3, 3x4, 4x6, dsb.), dan proses banyak foto sekaligus (bulk data) dengan ekspor ZIP.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
